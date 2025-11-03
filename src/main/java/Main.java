@@ -10,6 +10,7 @@ public class Main extends AbstractVerticle {
 
     // Define a route
     router.get("/test").handler(ctx -> {
+      System.out.println("GOT REQUEST");
       ctx.response()
           .putHeader("content-type", "text/plain")
           .end("Hello!");
