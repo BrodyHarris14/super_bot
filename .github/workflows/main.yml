@@ -1,12 +1,16 @@
-name: Build and Dockerize
+name: Build and Publish Docker Image
 
 on:
   push:
     branches:
       - main
 
+env:
+  IMAGE_NAME: super_bot
+  IMAGE_TAG: latest
+
 jobs:
-  build:
+  build-and-publish:
     runs-on: ubuntu-latest
 
     steps:
@@ -25,15 +29,16 @@ jobs:
       - name: Build with Maven
         run: mvn clean package
 
-
       # Log in to GitHub Container Registry
       - name: Log in to GitHub Container Registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      # Build Docker image
-      - name: Build Docker image
-        run: docker build -t ghcr.io/${{ github.repository_owner }}/super_bot:latest .
-
-      # Push Docker image to GitHub Packages
-      - name: Push Docker image
-        run: docker push ghcr.io/${{ github.repository_owner }}/super_bot:latest
+      # Build and push Docker image
+      - name: Build and Push Docker Image
+        run: |
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          docker buildx build \
+            --platform linux/amd64 \
+            --tag ghcr.io/$REPO_OWNER/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} \
+            --push \
+            .
