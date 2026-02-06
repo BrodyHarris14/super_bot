@@ -7,7 +7,7 @@ on:
 
 env:
   IMAGE_NAME: super_bot
-  IMAGE_TAG: ${{ github.run_number }}
+  IMAGE_TAG: "1.${{ github.run_number }}"
 
 jobs:
   build-and-publish:
