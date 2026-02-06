@@ -1,3 +1,4 @@
+import Weather.LocalWeatherService;
 import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Vertx;
 import io.vertx.ext.web.Router;
@@ -15,6 +16,22 @@ public class Main extends AbstractVerticle {
           .putHeader("content-type", "text/plain")
           .end("Hello!");
     });
+
+    // Define the Weather route
+      router.get("/localWeather").handler(ctx -> {
+          System.out.println("got local weather request");
+          try {
+              String weather = LocalWeatherService.getLocalWeather();
+              ctx.response()
+                      .putHeader("content-type", "text/plain")
+                      .end(weather);
+          } catch (Exception e){
+              ctx.response()
+                      .putHeader("content-type", "text/plain")
+                      .setStatusCode(500)
+                      .end();
+          }
+      });
 
     // Start an HTTP server
     vertx.createHttpServer()
