@@ -21,6 +21,7 @@ Env vars:
                              app id; override only for testing)
 """
 import os
+import queue
 import threading
 
 import requests
@@ -53,6 +54,17 @@ INTERACTION_MESSAGE_COMPONENT = 3
 RESPONSE_PONG = 1
 RESPONSE_CHANNEL_MESSAGE = 4  # reply with a message
 RESPONSE_DEFERRED = 5  # ack; send the real reply later via the webhook
+
+# Max generations a single /gpt invocation can request. Discord enforces the
+# min/max at the command-definition level (see register_commands.py), so we
+# also clamp here defensively.
+MAX_GENERATIONS = 10
+
+# A single-worker queue that serializes /gpt batches across all users. One
+# worker pulls jobs FIFO and runs each batch to completion before the next,
+# so two users hitting /gpt count:10 at the same time produce A1..A10 then
+# B1..B10 (not interleaved). Trivially fair; no locks needed.
+_gen_queue = queue.Queue()
 
 # Whitespace-free body types we forward to ml-runner without buffering.
 FORWARD_AS_IS = {"application/x-www-form-urlencoded", "multipart/form-data"}
@@ -254,15 +266,23 @@ def _option(data, name, default=None):
 
 def _handle_gpt_command(payload, data):
     """
-    /gpt command: `set` (string, required) + `prefix` (string, optional).
+    /gpt command: `set` (string, required) + `prefix` (string, optional) +
+    `count` (integer 1..10, optional, default 1).
 
-    GPT generation can take longer than Discord's 3s initial-response window,
-    so we immediately respond with DEFERRED and then POST the generated text
-    to the interaction's followup webhook (`/webhooks/<app>/<token>`) in a
-    background thread once ml-runner returns.
+    Enqueues a batch onto the single-worker _gen_queue and responds DEFERRED
+    within Discord's 3s window. The worker runs each batch serially: it calls
+    ml-runner /generate `count` times and posts each result as a separate
+    followup message as soon as it returns. Because there's one worker, two
+    users hitting /gpt count:10 at once produce A1..A10 then B1..B10.
     """
     set_name = _option(data, "set")
     prefix = _option(data, "prefix", "") or ""
+    count = _option(data, "count", 1)
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        count = 1
+    count = max(1, min(MAX_GENERATIONS, count))
 
     if not set_name:
         return jsonify({
@@ -279,48 +299,71 @@ def _handle_gpt_command(payload, data):
             "data": {"content": "Internal error: missing interaction token."},
         })
 
-    # Fire the generation + followup in the background.
-    t = threading.Thread(
-        target=_gpt_followup,
-        args=(app_id, token, set_name, prefix),
-        daemon=True,
-    )
-    t.start()
+    # Enqueue the batch; the single worker picks it up and streams results.
+    _gen_queue.put((app_id, token, set_name, prefix, count))
+    app.logger.info("Enqueued /gpt batch: set=%s prefix=%r count=%d",
+                    set_name, prefix[:40], count)
 
     # Acknowledge within the 3s window.
     return jsonify({"type": RESPONSE_DEFERRED})
 
 
-def _gpt_followup(app_id, token, set_name, prefix):
+def _gpt_worker():
     """
-    Background thread: call ml-runner /generate, then POST the result to the
-    Discord interaction followup webhook. The webhook is valid for ~15 minutes
-    after the interaction, and accepts any number of followup messages.
+    Background worker that drains _gen_queue serially. Each job is one
+    /gpt invocation; it runs `count` generations back-to-back, posting each
+    result as a followup as soon as it's ready. Runs forever (daemon thread).
+    """
+    while True:
+        app_id, token, set_name, prefix, count = _gen_queue.get()
+        try:
+            _gpt_followup(app_id, token, set_name, prefix, count)
+        except Exception as e:
+            app.logger.exception("/gpt worker job crashed: %s", e)
+        finally:
+            _gen_queue.task_done()
+
+
+# Start the single worker once at import time.
+threading.Thread(target=_gpt_worker, daemon=True).start()
+
+
+def _gpt_followup(app_id, token, set_name, prefix, count=1):
+    """
+    Run `count` generations from ml-runner, posting each result as a separate
+    followup to the Discord interaction webhook as soon as it returns. The
+    webhook is valid for ~15 minutes after the interaction and accepts any
+    number of followups. Called by the single _gpt_worker, so batches are
+    serialized across users (A1..A10 then B1..B10, not interleaved).
     """
     webhook_url = ("https://discord.com/api/webhooks/{}/{}".format(app_id, token))
-    try:
-        upstream = requests.post(
-            f"{ML_RUNNER_URL}/generate",
-            data={"set": set_name, "prefix": prefix},
-            timeout=REQUEST_TIMEOUT,
-        )
-    except requests.exceptions.RequestException as e:
-        _post_followup(webhook_url, "GPT generation failed: {}".format(e))
-        return
+    for i in range(count):
+        try:
+            upstream = requests.post(
+                f"{ML_RUNNER_URL}/generate",
+                data={"set": set_name, "prefix": prefix},
+                timeout=REQUEST_TIMEOUT,
+            )
+        except requests.exceptions.RequestException as e:
+            _post_followup(webhook_url, "GPT generation {} failed: {}".format(i + 1, e))
+            return
 
-    if not upstream.ok:
-        _post_followup(webhook_url,
-                       "GPT generation failed (upstream {}): {}".format(
-                           upstream.status_code, upstream.text[:500]))
-        return
+        if not upstream.ok:
+            _post_followup(webhook_url,
+                           "GPT generation {} failed (upstream {}): {}".format(
+                               i + 1, upstream.status_code, upstream.text[:500]))
+            return
 
-    text = upstream.text.strip()
-    if not text:
-        text = "_(generated text was empty)_"
-    # Truncate to Discord's 2000-char message limit.
-    if len(text) > 1900:
-        text = text[:1900] + "…"
-    _post_followup(webhook_url, "```\n{}\n```".format(text))
+        text = upstream.text.strip()
+        if not text:
+            text = "_(generated text was empty)_"
+        # Truncate to Discord's 2000-char message limit.
+        if len(text) > 1900:
+            text = text[:1900] + "…"
+        # Prefix multi-generation results with an index so the user can tell
+        # them apart in the channel.
+        label = "" if count == 1 else "**[{}]**\n".format(i + 1)
+        _post_followup(webhook_url, "{}```\n{}\n```".format(label, text))
 
 
 def _post_followup(webhook_url, content):

@@ -19,9 +19,10 @@ straightforward to implement.
     params, same forms (query string, JSON, or form-encoded) as `/generate`.
   - `/discord` (POST) — the Discord Interactions Endpoint. Verifies
     Discord's Ed25519 signature, handles PING, and dispatches slash commands.
-    The `/gpt` slash command defers within Discord's 3s window and POSTs the
-    generated text to the interaction's followup webhook once ml-runner
-    returns (GPT generation can exceed 3s).
+    The `/gpt` slash command defers within Discord's 3s window, then a
+    single-worker queue runs the requested number of generations serially and
+    POSTs each result to the interaction's followup webhook as it returns
+    (GPT generation can exceed 3s, and a batch of up to 10 takes longer).
   - `/localWeather` — proxies Open-Meteo (carried over from the Java skeleton).
 - **`register_commands.py`** — a one-shot admin script to register/update the
   slash-command definitions with Discord. Run it locally (not in the cluster)
@@ -61,7 +62,7 @@ cluster, to ml-runner, and back to Discord as a followup message.
 
 ```mermaid
 flowchart TB
-    User["Discord user\ntypes /gpt set:trump-tweet prefix:hello"]
+    User["Discord user\ntypes /gpt set:trump-tweet prefix:hello count:3"]
 
     subgraph Discord["Discord"]
         API["Discord API\nPOST /discord (signed)"]
@@ -77,9 +78,10 @@ flowchart TB
             Conn["persistent outbound\nconnections to CF edge"]
         end
         Svc["super-bot-service\nNodePort 30080"]
-        subgraph SB["super_bot pod"]
+        subgraph SB["super_bot pod (1 replica)"]
             App["app.py\n/discord route"]
-            Fwd["_gpt_followup\nbackground thread"]
+            Q[("_gen_queue\nFIFO batch queue")]
+            Worker["_gpt_worker\nsingle daemon thread"]
         end
     end
 
@@ -93,15 +95,40 @@ flowchart TB
     Conn --> Svc
     Svc --> App
     App -->|"DEFERRED (type 5)\nwithin 3s"| API
-    App -->|"spawn thread"| Fwd
-    Fwd -->|"POST /generate\n{set, prefix}"| ML
-    ML -->|"200 text/plain\n→ generated text"| Fwd
-    Fwd -->|"POST /webhooks/...\n{content}"| Webhook
+    App -->|"enqueue\n(set, prefix, count)"| Q
+    Q --> Worker
+    Worker -->|"POST /generate\n× count, serially"| ML
+    ML -->|"200 text/plain\n→ generated text"| Worker
+    Worker -->|"POST /webhooks/...\n{content} × count"| Webhook
     Webhook --> User
 ```
 
 The direct HTTP path (curl → NodePort 30080 → `/gpt`) skips Discord and the
-tunnel entirely — it just proxies straight to ml-runner `/generate`.
+tunnel entirely — it just proxies straight to ml-runner `/generate`. It does
+not go through the generation queue (that's a Discord-only concern).
+
+### Generation queue & serialization (Discord `/gpt`)
+
+Discord `/gpt` batches are run by a **single in-process worker** draining a
+FIFO `queue.Queue`. The worker runs each batch to completion (calls ml-runner
+`/generate` `count` times and posts each result as a followup as it returns)
+before pulling the next batch. This gives two properties:
+
+- **Within a batch**, the `count` generations are posted in order, one after
+  another, as each completes — so `/gpt count:3` shows the user three followups
+  labeled `**[1]**`, `**[2]**`, `**[3]**`.
+- **Across batches**, batches are serialized — user A's whole batch finishes
+  before user B's starts, so two users hitting `/gpt count:10` at once produce
+  A1..A10 then B1..B10, not interleaved.
+
+The queue is **per-process**. super_bot currently runs **1 replica**
+(`home-kubernetes/k8s/super-bot/deployment.yaml`), so there's exactly one
+worker and cross-user serialization holds. If the replica count is ever bumped
+above 1, each pod gets its own queue + worker, and two users landing on
+different pods at the same instant could interleave — each user's own batch
+stays serialized, but batches from different pods run concurrently. True
+cross-pod serialization would require a shared queue (e.g. in-cluster Redis);
+that's overkill for a home bot, so we keep 1 replica + in-process queue.
 
 ## API (pseudo-swagger)
 
@@ -155,7 +182,12 @@ requests return `202` JSON with a `job_id`.
 
 | Command | Options | Behavior |
 |---|---|---|
-| `/gpt` | `set` (required), `prefix` (optional) | Defers → calls ml-runner → posts generated text as a followup |
+| `/gpt` | `set` (required), `prefix` (optional), `count` (optional int 1-10, default 1) | Defers → worker runs `count` generations serially → posts each result as a followup |
+
+`count` is enforced as 1-10 at the Discord client (min/max in the command
+definition), so users can't submit `/gpt count:50`. super_bot also clamps it
+defensively. For `count > 1`, each followup is prefixed `**[N]**` so the
+user can tell the generations apart.
 
 Discord app credentials (application ID + public key) are baked into `app.py`
 as defaults — both are non-secret. The bot token (which *is* secret) is only
@@ -170,6 +202,9 @@ used by `register_commands.py` locally.
 | `DISCORD_PUBLIC_KEY` | (baked-in OUT OF OFFICE key) | Ed25519 key to verify Discord signatures |
 | `DISCORD_APPLICATION_ID` | (baked-in OUT OF OFFICE id) | App id for building followup webhook URLs |
 | `WEATHER_LAT` / `WEATHER_LON` | Denver | Open-Meteo coordinates |
+
+`MAX_GENERATIONS = 10` is a constant in `app.py` (not env-overridable) — the
+upper bound on `/gpt count`. Discord enforces the same limit client-side.
 
 ## Command overview
 
