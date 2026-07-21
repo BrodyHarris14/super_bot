@@ -51,6 +51,10 @@ COMMANDS = [
             },
         ],
     },
+    {
+        "name": "gpt-sets",
+        "description": "List the available trained GPT-2 sets.",
+    },
 ]
 
 

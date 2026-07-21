@@ -247,12 +247,67 @@ def _dispatch_command(payload):
     if name == "gpt":
         return _handle_gpt_command(payload, data)
 
+    if name == "gpt-sets":
+        return _handle_gpt_sets_command(payload, data)
+
     # Unknown command — acknowledge with a deferred so Discord doesn't error,
     # and (best effort) post a "not implemented" followup.
     app.logger.info("Unknown command: %s", name)
     return jsonify({
         "type": RESPONSE_CHANNEL_MESSAGE,
         "data": {"content": "Command `{}` is not implemented yet.".format(name)},
+    })
+
+
+def _handle_gpt_sets_command(payload, data):
+    """
+    /gpt-sets command: no options. Synchronously fetches ml-runner /sets and
+    returns the set list as a Discord message. Fast enough (one quick HTTP
+    GET) to respond within Discord's 3s window, so no deferral needed.
+    """
+    try:
+        r = requests.get(f"{ML_RUNNER_URL}/sets", timeout=5)
+    except requests.exceptions.RequestException as e:
+        app.logger.warning("/gpt-sets upstream fetch failed: %s", e)
+        return jsonify({
+            "type": RESPONSE_CHANNEL_MESSAGE,
+            "data": {"content": "Could not reach ml-runner: {}".format(e)},
+        })
+
+    if not r.ok:
+        return jsonify({
+            "type": RESPONSE_CHANNEL_MESSAGE,
+            "data": {"content": "ml-runner /sets returned {}".format(r.status_code)},
+        })
+
+    try:
+        body = r.json()
+    except ValueError:
+        return jsonify({
+            "type": RESPONSE_CHANNEL_MESSAGE,
+            "data": {"content": "ml-runner /sets returned non-JSON"},
+        })
+
+    sets = body.get("sets") or []
+    if not sets:
+        content = "No trained sets found."
+    else:
+        lines = ["**Trained sets** (`/gpt set:<name> ...`):", ""]
+        for s in sets:
+            nm = s.get("name", "?")
+            trained = "\u2705" if s.get("trained") else "\u274c"
+            desc = s.get("description") or ""
+            lines.append("{} `{}`{}".format(
+                trained, nm,
+                " \u2014 {}".format(desc) if desc else ""))
+        content = "\n".join(lines)
+
+    # Discord caps message content at 2000 chars.
+    if len(content) > 1990:
+        content = content[:1990] + "…"
+    return jsonify({
+        "type": RESPONSE_CHANNEL_MESSAGE,
+        "data": {"content": content},
     })
 
 
@@ -362,8 +417,7 @@ def _gpt_followup(app_id, token, set_name, prefix, count=1):
             text = text[:1900] + "…"
         # Prefix multi-generation results with an index so the user can tell
         # them apart in the channel.
-        label = "" if count == 1 else "**{}**".format(i + 1)
-        _post_followup(webhook_url, "{} {}/{}:\n> {}".format(set_name, label, count, text))
+        _post_followup(webhook_url, "{} **{}**/{}:\n> {}".format(set_name, i, count, text))
 
 
 def _post_followup(webhook_url, content):
