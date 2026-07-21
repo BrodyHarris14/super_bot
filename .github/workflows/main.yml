@@ -18,17 +18,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # Set up Java
-      - name: Set up JDK
-        uses: actions/setup-java@v3
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      # Run Maven build
-      - name: Build with Maven
-        run: mvn clean package
-
       # Log in to GitHub Container Registry
       - name: Log in to GitHub Container Registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
