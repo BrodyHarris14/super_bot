@@ -49,13 +49,26 @@ INTERACTION_PING = 1
 INTERACTION_APPLICATION_COMMAND = 2
 INTERACTION_MESSAGE_COMPONENT = 3
 
-# Discord interaction response types.end the real reply later via the webhook
-
-# Default GPT set for the /gpt command if the `set` option is omitted.
-DEFAULT_GPT_SET = "trump-tweet"
+# Discord interaction response types.
+RESPONSE_PONG = 1
+RESPONSE_CHANNEL_MESSAGE = 4  # reply with a message
+RESPONSE_DEFERRED = 5  # ack; send the real reply later via the webhook
 
 # Whitespace-free body types we forward to ml-runner without buffering.
 FORWARD_AS_IS = {"application/x-www-form-urlencoded", "multipart/form-data"}
+
+
+# -------------------------------------------------------------------
+# Request logging
+# -------------------------------------------------------------------
+
+@app.before_request
+def _log_request():
+    """Log every incoming request: method, path, and origin IP."""
+    # X-Forwarded-For is set by Cloudflare's edge; fall back to remote_addr
+    # for direct LAN calls (NodePort) where there's no proxy in front.
+    origin = request.headers.get("X-Forwarded-For", request.remote_addr or "?")
+    app.logger.info("%s %s from %s", request.method, request.path, origin)
 
 
 # -------------------------------------------------------------------
@@ -200,9 +213,12 @@ def discord_interactions():
     itype = payload.get("type")
 
     if itype == INTERACTION_PING:
+        app.logger.info("Discord PING (handshake)")
         return jsonify({"type": RESPONSE_PONG})
 
     if itype == INTERACTION_APPLICATION_COMMAND:
+        cmd_name = ((payload.get("data") or {}).get("name") or "?")
+        app.logger.info("Discord command: /%s", cmd_name)
         return _dispatch_command(payload)
 
     # Other interaction types (message components, modals, autocomplete) are
