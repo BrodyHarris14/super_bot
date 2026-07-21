@@ -1,6 +1,9 @@
 # super_bot
 
-The Java brains of the discord microservices endeavors. It:
+A thin Python (Flask) router that fronts external requests and dispatches them
+to backing microservices on the home server. Currently it proxies GPT-2 text
+generation requests to [`ml-runner`](../discord_gptbot/ml-runner) and exposes
+a local-weather lookup.
 
 ## Manages interactions with the OUT OF OFFICE discord server
 
@@ -75,10 +78,24 @@ class Discord,Available_Commands,Sports_Channels discord
 classDef default stroke:black, fill:black, color:white
 ```
 
-### Command overview
+### Implemented endpoints
 
-| Command | Uses | Handled By|
-| - | - | - |
-| | | |
+| Endpoint | Method | Upstream | Notes |
+| - | - | - | - |
+| `/health` | GET | — | Liveness + pings `ML_RUNNER_URL` |
+| `/gpt` | GET / POST | `ml-runner` `/generate` | Same params/forms as `/generate` |
+| `/localWeather` | GET | Open-Meteo | Carried over from the Java skeleton |
+
+### `/gpt` parameters
+
+Identical to ml-runner's `/generate`. Any of these forms work:
+
+- `GET /gpt?set=trump-tweet&prefix=hello&async=true`
+- `POST /gpt` with `Content-Type: application/json`: `{"set": "...", "prefix": "...", "async": true}`
+- `POST /gpt` with form-encoded body
+
+`set` is required; `prefix` defaults to `""`; `async` enables async mode
+(`"1"`, `"true"`, or `"yes"`). Sync requests return plain text; async
+requests return `202` JSON with a `job_id`.
 
 ## Performs smart server reboots based on ongoing jobs

@@ -14,17 +14,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # Set up Java
-      - name: Set up JDK
-        uses: actions/setup-java@v3
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-
-      # Run Maven build
-      - name: Build with Maven
-        run: mvn clean package
-
       # Build Docker image
       - name: Build Docker image
         run: docker build -t super_bot .
