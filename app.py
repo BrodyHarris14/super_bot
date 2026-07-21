@@ -15,8 +15,10 @@ Because GPT generation can exceed Discord's 3s initial-response window, the
 Env vars:
     PORT                    port to listen on (default 8080)
     ML_RUNNER_URL           base URL of ml-runner (default http://localhost:7070)
-    DISCORD_PUBLIC_KEY       Ed25519 public key from the Discord app (required for /discord)
-    DISCORD_APPLICATION_ID   application id (only needed for the /gpt command)
+    DISCORD_PUBLIC_KEY       Ed25519 public key from the Discord app (defaults to the
+                             OUT OF OFFICE app key; override only for testing)
+    DISCORD_APPLICATION_ID   Discord application id (defaults to the OUT OF OFFICE
+                             app id; override only for testing)
 """
 import os
 import threading
@@ -32,18 +34,22 @@ ML_RUNNER_URL = os.environ.get("ML_RUNNER_URL", "http://localhost:7070")
 PORT = int(os.environ.get("PORT", "8080"))
 REQUEST_TIMEOUT = 600  # ml-runner's gunicorn timeout is 600s; match it.
 
-DISCORD_PUBLIC_KEY = os.environ.get("DISCORD_PUBLIC_KEY", "")
-DISCORD_APPLICATION_ID = os.environ.get("DISCORD_APPLICATION_ID", "")
+# Discord app credentials for the OUT OF OFFICE server. Both are non-secret
+# (the public key verifies signatures, the application id is public), so they
+# live here as defaults. Override via env only for local testing with a
+# different app.
+DISCORD_PUBLIC_KEY = os.environ.get(
+    "DISCORD_PUBLIC_KEY",
+    "39df18124bc34d84d1ba2f3c7843fa0bcfce575b8ed685ed26c00e13428aa04f",
+)
+DISCORD_APPLICATION_ID = os.environ.get("DISCORD_APPLICATION_ID", "1434750818245939281")
 
 # Discord interaction types.
 INTERACTION_PING = 1
 INTERACTION_APPLICATION_COMMAND = 2
 INTERACTION_MESSAGE_COMPONENT = 3
 
-# Discord interaction response types.
-RESPONSE_PONG = 1
-RESPONSE_CHANNEL_MESSAGE = 4  # reply with a message
-RESPONSE_DEFERRED = 5  # ack; send the real reply later via the webhook
+# Discord interaction response types.end the real reply later via the webhook
 
 # Default GPT set for the /gpt command if the `set` option is omitted.
 DEFAULT_GPT_SET = "trump-tweet"
@@ -232,18 +238,21 @@ def _option(data, name, default=None):
 
 def _handle_gpt_command(payload, data):
     """
-    /gpt command: `set` (string, optional) + `prefix` (string, optional).
+    /gpt command: `set` (string, required) + `prefix` (string, optional).
 
     GPT generation can take longer than Discord's 3s initial-response window,
     so we immediately respond with DEFERRED and then POST the generated text
     to the interaction's followup webhook (`/webhooks/<app>/<token>`) in a
     background thread once ml-runner returns.
     """
-    set_name = _option(data, "set", DEFAULT_GPT_SET) or DEFAULT_GPT_SET
+    set_name = _option(data, "set")
     prefix = _option(data, "prefix", "") or ""
 
-    if not DISCORD_APPLICATION_ID:
-        app.logger.error("DISCORD_APPLICATION_ID not set; cannot follow up")
+    if not set_name:
+        return jsonify({
+            "type": RESPONSE_CHANNEL_MESSAGE,
+            "data": {"content": "You must provide a `set` (e.g. `/gpt set:trump-tweet`)."},
+        })
 
     token = payload.get("token")
     app_id = payload.get("application_id") or DISCORD_APPLICATION_ID

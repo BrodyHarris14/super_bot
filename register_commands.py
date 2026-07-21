@@ -26,9 +26,9 @@ COMMANDS = [
         "options": [
             {
                 "name": "set",
-                "description": "The trained set to generate from (default: trump-tweet).",
+                "description": "The trained set to generate from (e.g. trump-tweet).",
                 "type": 3,  # STRING
-                "required": False,
+                "required": True,
             },
             {
                 "name": "prefix",
