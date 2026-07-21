@@ -110,26 +110,3 @@ def _forward_generate(params):
     content_type = upstream.headers.get("Content-Type", "text/plain")
     return Response(upstream.content, status=upstream.status_code,
                     mimetype=content_type.split(";")[0].strip())
-
-
-# -------------------------------------------------------------------
-# Local weather (carried over from the Java skeleton)
-# -------------------------------------------------------------------
-
-@app.route("/localWeather", methods=["GET"])
-def local_weather():
-    """Proxy the Open-Meteo current-temperature endpoint (env-configurable)."""
-    import urllib.request
-    lat = os.environ.get("WEATHER_LAT", "39.7392")
-    lon = os.environ.get("WEATHER_LON", "-104.9903")
-    url = (f"https://api.open-meteo.com/v1/forecast"
-           f"?latitude={lat}&longitude={lon}&current=temperature_2m")
-    try:
-        with urllib.request.urlopen(url, timeout=10) as resp:
-            return Response(resp.read(), mimetype="application/json")
-    except Exception as e:
-        return jsonify({"error": "weather lookup failed", "detail": str(e)}), 500
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT)
