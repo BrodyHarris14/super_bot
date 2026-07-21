@@ -362,7 +362,7 @@ def _gpt_followup(app_id, token, set_name, prefix, count=1):
             text = text[:1900] + "…"
         # Prefix multi-generation results with an index so the user can tell
         # them apart in the channel.
-        label = "" if count == 1 else "**[{}]**\n".format(i + 1)
+        label = "" if count == 1 else "**{}**\n".format(i + 1)
         _post_followup(webhook_url, "{} {}/{}:\n> {}".format(set_name, label, count, text))
 
 
