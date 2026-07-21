@@ -41,6 +41,14 @@ COMMANDS = [
                 "type": 3,  # STRING
                 "required": False,
             },
+            {
+                "name": "count",
+                "description": "How many generations to produce and post (1-10).",
+                "type": 4,  # INTEGER
+                "required": False,
+                "min_value": 1,
+                "max_value": 10,
+            },
         ],
     },
 ]
