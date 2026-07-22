@@ -185,7 +185,7 @@ def _run_batch(app_id, token, set_name, prefix, count, logger):
         ok, result = generate(set_name, prefix)
         if not ok:
             d.post_followup(webhook_url,
-                            "GPT generation {} failed: {}".format(i + 1, result),
+                            d.create_message("GPT generation {} failed: {}".format(i + 1, result)),
                             logger=logger)
             return
 
@@ -196,8 +196,8 @@ def _run_batch(app_id, token, set_name, prefix, count, logger):
             text = text[:1900] + "…"
         # Prefix multi-generation results with an index so the user can tell
         # them apart in the channel.
-        label = "" if count == 1 else "**[{}]**\n".format(i + 1)
-        d.post_followup(webhook_url, "{}```\n{}\n```".format(label, text),
+        title = "{} - {}/{}".format(set_name, i, count)
+        d.post_followup(webhook_url, d.create_embed(title, text),
                         logger=logger)
 
 

@@ -40,10 +40,31 @@ def deferred_response():
     return jsonify({"type": RESPONSE_DEFERRED})
 
 
-def post_followup(webhook_url, content, logger=None):
+def create_embed(title, description):
+    """
+    Build a followup payload containing a single embed with the given title
+    and description. Discord renders this as a rich card with a colored left
+    border. The description is clamped to Discord's 4096-char embed limit.
+    """
+    if len(description) > 4096:
+        description = description[:4096] + "…"
+    return {"embeds": [{"title": title, "description": description}]}
+
+
+def create_message(content):
+    """
+    Build a followup payload containing a plain message. Clamps to Discord's
+    2000-char message limit.
+    """
+    if len(content) > 2000:
+        content = content[:2000] + "…"
+    return {"content": content}
+
+
+def post_followup(webhook_url, json, logger=None):
     """POST a followup message to a Discord interaction webhook."""
     try:
-        r = requests.post(webhook_url, json={"content": content}, timeout=10)
+        r = requests.post(webhook_url, json=json, timeout=10)
         if not r.ok and logger:
             logger.warning("Discord followup failed: %s %s",
                            r.status_code, r.text[:300])
