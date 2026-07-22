@@ -207,7 +207,7 @@ def _run_batch(app_id, token, set_name, prefix, count, logger):
         embed_title = result.get("embed_title") or set_name
         embed_color = result.get("embed_color")
         embed_image = result.get("embed_image")
-        footer = "{} - {_''_} - {}/{}".format(set_name, prefix, i + 1, count)
+        footer = "{} - *{}* - {}/{}".format(set_name, prefix, i + 1, count)
         d.post_followup(webhook_url,
                         d.create_embed(embed_title, text, footer=footer,
                                        color=embed_color, image=embed_image),
