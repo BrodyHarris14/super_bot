@@ -40,15 +40,30 @@ def deferred_response():
     return jsonify({"type": RESPONSE_DEFERRED})
 
 
-def create_embed(title, description):
+def create_embed(title, description, footer=None, color=None, image=None):
     """
-    Build a followup payload containing a single embed with the given title
-    and description. Discord renders this as a rich card with a colored left
-    border. The description is clamped to Discord's 4096-char embed limit.
+    Build a followup payload containing a single embed with the given title,
+    description, and optional footer/color/image. Discord renders this as a
+    rich card with a colored left border (if color is set). The description
+    is clamped to Discord's 4096-char embed limit; the footer to 2048.
+
+    `color` is an int (e.g. 0x03befc) or a hex string (e.g. "03befc").
+    `image` is a URL string (shown as a thumbnail on the right side).
     """
     if len(description) > 4096:
         description = description[:4096] + "…"
-    return {"embeds": [{"title": title, "description": description}]}
+    embed = {"title": title, "description": description}
+    if footer:
+        if len(footer) > 2048:
+            footer = footer[:2048] + "…"
+        embed["footer"] = {"text": footer}
+    if color is not None:
+        if isinstance(color, str):
+            color = int(color, 16)
+        embed["color"] = color
+    if image:
+        embed["thumbnail"] = {"url": image}
+    return {"embeds": [embed]}
 
 
 def create_message(content):

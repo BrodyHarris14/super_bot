@@ -35,7 +35,11 @@ _gen_queue = queue.Queue()
 # -------------------------------------------------------------------
 
 def generate(set_name, prefix=""):
-    """Call ml-runner /generate synchronously. Returns (ok, text_or_error)."""
+    """Call ml-runner /generate synchronously.
+
+    Returns (ok, result) where result is either the parsed JSON body
+    (a dict with `text` + optional embed metadata) or an error string.
+    """
     try:
         r = requests.post(
             f"{ML_RUNNER_URL}/generate",
@@ -47,7 +51,11 @@ def generate(set_name, prefix=""):
     if not r.ok:
         return False, "ml-runner /generate returned {}: {}".format(
             r.status_code, r.text[:500])
-    return True, r.text
+    try:
+        return True, r.json()
+    except ValueError:
+        # Older ml-runner versions returned plain text; wrap it.
+        return True, {"text": r.text}
 
 
 def list_sets():
@@ -189,15 +197,20 @@ def _run_batch(app_id, token, set_name, prefix, count, logger):
                             logger=logger)
             return
 
-        text = result.strip()
+        # ml-runner returns {text, embed_title?, embed_color?, embed_image?}.
+        # Fall back to the set name if no embed_title is configured.
+        text = (result.get("text") or "").strip()
         if not text:
             text = "_(generated text was empty)_"
-        if len(text) > 1900:  # Discord's 2000-char message limit.
-            text = text[:1900] + "…"
-        # Prefix multi-generation results with an index so the user can tell
-        # them apart in the channel.
-        title = "{} - {}/{}".format(set_name, i, count)
-        d.post_followup(webhook_url, d.create_embed(title, text),
+        if len(text) > 4096:  # Discord's embed description limit.
+            text = text[:4096] + "…"
+        embed_title = result.get("embed_title") or set_name
+        embed_color = result.get("embed_color")
+        embed_image = result.get("embed_image")
+        footer = "{} - {}/{}".format(set_name, i, count)
+        d.post_followup(webhook_url,
+                        d.create_embed(embed_title, text, footer=footer,
+                                       color=embed_color, image=embed_image),
                         logger=logger)
 
 
