@@ -86,14 +86,11 @@ def _fetch_set_choices(ml_runner_url):
         name = s.get("name")
         if not name:
             continue
-        # Use the description as the display name if available, else the
-        # set name itself. The value is always the set name (what super_bot
-        # passes to ml-runner /generate).
-        label = s.get("description") or name
-        # Discord limits choice names to 100 chars.
-        if len(label) > 100:
-            label = label[:100]
-        choices.append({"name": label, "value": name})
+        # The dropdown shows just the set name. The value is also the set
+        # name (what super_bot passes to ml-runner /generate).
+        if len(name) > 100:
+            name = name[:100]
+        choices.append({"name": name, "value": name})
 
     if not choices:
         sys.exit("No valid sets found in ml-runner response.")
